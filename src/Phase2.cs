@@ -121,6 +121,7 @@ namespace BGLauncher
 
         void InitPhase2()
         {
+            RecoverPendingIni();
             accounts = Store.LoadAccounts(dataDir);
             prefs = Store.LoadPrefs(dataDir);
             tick = new System.Windows.Forms.Timer { Interval = 2000 };
@@ -249,7 +250,7 @@ namespace BGLauncher
                 {
                     var al = cfg.autoLogin;
                     string ini = Util.SafeLocal(root, al.file);
-                    if (iniBackup == null) { iniPath = ini; iniHad = File.Exists(ini); iniBackup = iniHad ? File.ReadAllBytes(ini) : new byte[0]; }
+                    if (iniBackup == null) { iniPath = ini; iniHad = File.Exists(ini); iniBackup = iniHad ? File.ReadAllBytes(ini) : new byte[0]; SavePendingIni(); }
                     Func<string, string> q = delegate (string s) { return al.quote ? "\"" + s + "\"" : s; };
                     Util.WriteIni(ini, al.section, al.user, q(a.user));
                     Util.WriteIni(ini, al.section, al.pass, q(a.pass));
@@ -273,8 +274,48 @@ namespace BGLauncher
         void RestoreIni()
         {
             if (iniBackup == null) return;
-            try { if (iniHad) File.WriteAllBytes(iniPath, iniBackup); else if (File.Exists(iniPath)) File.Delete(iniPath); } catch { }
+            try { if (iniHad) File.WriteAllBytes(iniPath, iniBackup); else if (File.Exists(iniPath)) File.Delete(iniPath); }
+            catch { return; }       // no se pudo (archivo en uso): se conserva la copia para reintentar en el próximo arranque
             iniBackup = null;
+            ClearPendingIni();
+        }
+
+        // La copia del Settings.ini original también se guarda en disco: si el launcher se cierra a la fuerza
+        // (antivirus, corte de luz, administrador de tareas) la contraseña no se queda en el archivo para siempre.
+        string PendingIniFile { get { return Path.Combine(dataDir, "ini.pendiente"); } }
+
+        void SavePendingIni()
+        {
+            try
+            {
+                Directory.CreateDirectory(dataDir);
+                var o = new Dictionary<string, object> { { "path", iniPath }, { "had", iniHad }, { "data", Convert.ToBase64String(iniBackup) } };
+                File.WriteAllText(PendingIniFile, Util.Json().Serialize(o), new UTF8Encoding(false));
+            }
+            catch { }
+        }
+
+        void ClearPendingIni() { try { if (File.Exists(PendingIniFile)) File.Delete(PendingIniFile); } catch { } }
+
+        // Al abrir el launcher: si quedó una copia pendiente de una sesión anterior, devolver el Settings.ini a su estado original
+        void RecoverPendingIni()
+        {
+            try
+            {
+                if (!File.Exists(PendingIniFile)) return;
+                var o = Util.Json().DeserializeObject(File.ReadAllText(PendingIniFile)) as Dictionary<string, object>;
+                if (o != null && o.ContainsKey("path") && o.ContainsKey("data"))
+                {
+                    string path = Convert.ToString(o["path"]);
+                    // Solo dentro de la carpeta del cliente
+                    Util.SafeLocal(root, Util.Rel(root, Path.GetFullPath(path)));
+                    byte[] data = Convert.FromBase64String(Convert.ToString(o["data"]));
+                    bool had = o.ContainsKey("had") && Convert.ToBoolean(o["had"]);
+                    if (had) File.WriteAllBytes(path, data); else if (File.Exists(path)) File.Delete(path);
+                }
+                File.Delete(PendingIniFile);
+            }
+            catch { }
         }
 
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);

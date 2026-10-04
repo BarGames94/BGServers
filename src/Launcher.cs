@@ -11,6 +11,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -67,7 +68,7 @@ namespace BGLauncher
 
         public LauncherForm()
         {
-            dataDir = Path.Combine(root, ".launcher");
+            dataDir = DataFolder(root);
             Text = "Launcher";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
@@ -83,6 +84,32 @@ namespace BGLauncher
             InitPhase2();
             Load += delegate { Start(false); };
             FormClosed += delegate { if (pingTimer != null) pingTimer.Dispose(); };
+        }
+
+        // Datos del launcher (config en caché, licencia, cuentas guardadas...) fuera de la carpeta del juego:
+        // así no quedan a la vista dentro del cliente, no hacen falta permisos de escritura en "Program Files"
+        // y el publicador/antivirus no los tocan. Una carpeta por cada cliente instalado.
+        static string DataFolder(string clientRoot)
+        {
+            string id = Util.Md5Bytes(Encoding.UTF8.GetBytes(Path.GetFullPath(clientRoot).TrimEnd('\\').ToLowerInvariant())).Substring(0, 12);
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BGLauncher", id);
+            string old = Path.Combine(clientRoot, ".launcher");
+            try
+            {
+                Directory.CreateDirectory(dir);
+                if (Directory.Exists(old))
+                {
+                    // Se conservan las cuentas y preferencias del jugador; el resto (config, licencia, huellas) se vuelve a generar
+                    foreach (var keep in new[] { "cuentas.dat", "preferencias.json" })
+                    {
+                        string from = Path.Combine(old, keep), to = Path.Combine(dir, keep);
+                        if (File.Exists(from) && !File.Exists(to)) File.Copy(from, to);
+                    }
+                    Directory.Delete(old, true);
+                }
+            }
+            catch { }
+            return dir;
         }
 
         void SetColors()
